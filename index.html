@@ -253,4 +253,680 @@
     }
     .bottom-dock button {
       flex: 1;
-      padding:
+      padding: 11px 8px;
+      font-size: 13px;
+    }
+    .bottom-dock .btn-confirm-main {
+      flex: 1.6;
+      font-size: 14px;
+    }
+
+    /* 底部 TM/标签检查抽屉 */
+    .drawer-backdrop {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: rgba(0, 0, 0, 0.65);
+      z-index: 50;
+    }
+    .drawer {
+      position: fixed;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      max-height: 70vh;
+      overflow-y: auto;
+      background: var(--panel);
+      border-top: 1px solid var(--border);
+      border-radius: 16px 16px 0 0;
+      padding: 16px;
+      z-index: 51;
+    }
+    .tm-item {
+      background: var(--panel-2);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 10px;
+      margin-bottom: 8px;
+    }
+  </style>
+</head>
+<body>
+
+  <div id="errorBanner"></div>
+
+  <header>
+    <div class="header-top">
+      <div class="brand">
+        <span>Web CAT Studio</span>
+        <span class="badge">Trados .sdlppx</span>
+      </div>
+      <span id="progressText" style="font-size:12px;color:var(--muted);">未加载项目</span>
+    </div>
+    <div class="toolbar">
+      <label class="file-btn btn-primary" for="fileInput">打开 .sdlppx / .sdlxliff</label>
+      <input id="fileInput" type="file" style="display:none" />
+      <button type="button" id="btnLoadSample">立即加载示例 .sdlppx 测试</button>
+      <button type="button" id="btnPretranslate">TM 预翻译</button>
+      <button type="button" id="btnTagQA">标签 QA</button>
+      <button type="button" id="btnExport">导出返回包</button>
+    </div>
+  </header>
+
+  <div class="status-bar">
+    <span id="fileNameLabel">当前文件：无（支持手机与电脑本地解包）</span>
+    <span id="zipEngineStatus">引擎检查中...</span>
+  </div>
+
+  <main id="appMain">
+    <div class="empty-state" id="emptyState">
+      <h2>打开 Trados 项目包开始翻译</h2>
+      <p>支持直接读取本地 <b>.sdlppx</b> 项目包或 <b>.sdlxliff</b> 双语文件，保留内联标签并支持导出返回包。<br/>所有解析均在设备本地完成，不上传任何文档。</p>
+      <div class="empty-actions">
+        <label class="file-btn btn-primary" for="fileInput">选择本地 .sdlppx 文件</label>
+        <button type="button" id="btnLoadSampleHero">立即加载示例 .sdlppx 测试</button>
+      </div>
+    </div>
+    <div class="segment-list" id="segmentList"></div>
+  </main>
+
+  <!-- 底部触控操作栏 -->
+  <div class="bottom-dock">
+    <button type="button" id="btnPrev">上一句</button>
+    <button type="button" id="btnCopySource">复制原文</button>
+    <button type="button" id="btnOpenTM">TM / 标签</button>
+    <button type="button" class="btn-success btn-confirm-main" id="btnConfirmDock">✓ 确认句段</button>
+    <button type="button" id="btnNext">下一句</button>
+  </div>
+
+  <!-- TM 匹配与标签抽屉 -->
+  <div class="drawer-backdrop" id="tmDrawerBackdrop">
+    <div class="drawer" onclick="event.stopPropagation()">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
+        <strong style="font-size:15px;">TM 记忆库匹配与内联标签</strong>
+        <button type="button" id="btnCloseDrawer">关闭</button>
+      </div>
+      <div id="drawerTagsArea" style="margin-bottom:12px;"></div>
+      <div id="drawerTMArea"></div>
+    </div>
+  </div>
+
+  <script>
+    // 1. 全局错误捕获，确保手机上任何异常都能直接看见原因
+    function showError(msg) {
+      var banner = document.getElementById('errorBanner');
+      banner.style.display = 'block';
+      banner.textContent = '运行提示：' + msg;
+    }
+    window.onerror = function(message, source, lineno) {
+      showError(message + ' (行 ' + lineno + ')');
+    };
+
+    // 2. 应用状态
+    var state = {
+      fileName: '',
+      zipInstance: null,
+      xliffPath: '',
+      xmlDoc: null,
+      segments: [],
+      activeIndex: 0,
+      tmMemory: [
+        { source: 'Welcome to Trados Studio Web Editor.', target: '欢迎使用 Trados Studio 网页版编辑器。', score: 100 },
+        { source: 'Click Confirm Segment to save your translation.', target: '点击“确认句段”以保存您的译文。', score: 92 }
+      ]
+    };
+
+    // 检查 JSZip 引擎状态
+    window.addEventListener('DOMContentLoaded', function() {
+      var zipEl = document.getElementById('zipEngineStatus');
+      if (typeof JSZip !== 'undefined') {
+        zipEl.textContent = 'ZIP引擎：就绪';
+        zipEl.style.color = '#34d399';
+      } else {
+        zipEl.textContent = 'ZIP引擎：离线模式（仅可打开.sdlxliff或示例）';
+        zipEl.style.color = '#fbbf24';
+      }
+    });
+
+    // 3. 加载示例数据（不依赖任何外部网络库，点击必响应）
+    function loadSampleProject() {
+      state.fileName = 'Sample_Localization_Project.sdlppx';
+      state.zipInstance = null;
+      state.xliffPath = 'zh-CN/Sample_Doc.docx.sdlxliff';
+      state.xmlDoc = null;
+      state.segments = [
+        {
+          id: '1',
+          sourceText: 'Welcome to <g id="1">Trados Studio</g> Web Editor.',
+          targetText: '',
+          tags: ['<g id="1">', '</g>'],
+          status: 'untranslated'
+        },
+        {
+          id: '2',
+          sourceText: 'All <x id="2"/> inline formatting tags are preserved automatically.',
+          targetText: '',
+          tags: ['<x id="2"/>'],
+          status: 'untranslated'
+        },
+        {
+          id: '3',
+          sourceText: 'Tap the green Confirm button at the bottom to save and move to the next segment.',
+          targetText: '点击底部的绿色确认按钮以保存并跳转至下一句段。',
+          tags: [],
+          status: 'draft'
+        },
+        {
+          id: '4',
+          sourceText: 'Export the return package (<ph id="3"/>.sdlrpx) when translation is complete.',
+          targetText: '',
+          tags: ['<ph id="3"/>'],
+          status: 'untranslated'
+        }
+      ];
+      state.activeIndex = 0;
+      renderEditor();
+    }
+
+    // 4. 解析本地上传的 .sdlppx 或 .sdlxliff
+    function handleFileUpload(file) {
+      if (!file) return;
+      state.fileName = file.name;
+      var lowerName = file.name.toLowerCase();
+
+      // 情况 A：直接上传单个 .sdlxliff / .xliff 文件
+      if (lowerName.endsWith('.sdlxliff') || lowerName.endsWith('.xliff') || lowerName.endsWith('.xml')) {
+        var reader = new FileReader();
+        reader.onload = function(e) {
+          parseSdlXliffString(e.target.result, file.name);
+        };
+        reader.onerror = function() {
+          showError('读取文件失败，请将文件移动到手机“下载(Download)”目录后重试。');
+        };
+        reader.readAsText(file, 'UTF-8');
+        return;
+      }
+
+      // 情况 B：上传 .sdlppx 或 .zip 压缩项目包
+      if (typeof JSZip === 'undefined') {
+        showError('当前网络未成功加载 ZIP 解压组件，请刷新页面或先将项目包解压出 .sdlxliff 文件直接上传。');
+        return;
+      }
+
+      document.getElementById('fileNameLabel').textContent = '正在解包：' + file.name + ' ...';
+      JSZip.loadAsync(file).then(function(zip) {
+        state.zipInstance = zip;
+        var xliffFiles = [];
+        zip.forEach(function(relativePath, zipEntry) {
+          if (!zipEntry.dir && (relativePath.toLowerCase().endsWith('.sdlxliff') || relativePath.toLowerCase().endsWith('.xliff'))) {
+            xliffFiles.push(relativePath);
+          }
+        });
+
+        if (xliffFiles.length === 0) {
+          showError('压缩包内未找到 .sdlxliff 双语文件，请确认上传的是有效的 Trados 项目包。');
+          return;
+        }
+
+        // 优先选择包含目标语言子目录的文件（路径深度 > 1）
+        xliffFiles.sort(function(a, b) { return b.split('/').length - a.split('/').length; });
+        var targetFile = xliffFiles[0];
+        state.xliffPath = targetFile;
+
+        return zip.file(targetFile).async('string').then(function(xmlStr) {
+          parseSdlXliffString(xmlStr, file.name + ' -> ' + targetFile);
+        });
+      }).catch(function(err) {
+        showError('解包失败：' + (err && err.message ? err.message : '文件可能已损坏或手机权限受限'));
+      });
+    }
+
+    // 5. 解析 SDLXLIFF XML 结构
+    function parseSdlXliffString(xmlStr, displayTitle) {
+      try {
+        var parser = new DOMParser();
+        var xmlDoc = parser.parseFromString(xmlStr, 'application/xml');
+        var parseErr = xmlDoc.getElementsByTagName('parsererror');
+        if (parseErr.length > 0) {
+          showError('XML 解析异常：文件内容格式不正确。');
+          return;
+        }
+
+        state.xmlDoc = xmlDoc;
+        var transUnits = xmlDoc.getElementsByTagName('trans-unit');
+        var extracted = [];
+
+        for (var i = 0; i < transUnits.length; i++) {
+          var tu = transUnits[i];
+          var segSource = tu.getElementsByTagName('seg-source')[0] || tu.getElementsByTagName('source')[0];
+          var targetNode = tu.getElementsByTagName('target')[0];
+          if (!segSource) continue;
+
+          var mrks = segSource.getElementsByTagName('mrk');
+          if (mrks.length > 0) {
+            for (var m = 0; m < mrks.length; m++) {
+              if (mrks[m].getAttribute('mtype') === 'seg') {
+                var mid = mrks[m].getAttribute('mid') || String(extracted.length + 1);
+                var sInfo = serializeNodeWithTags(mrks[m]);
+                var tText = '';
+                var status = 'untranslated';
+
+                if (targetNode) {
+                  var tMrks = targetNode.getElementsByTagName('mrk');
+                  for (var tm = 0; tm < tMrks.length; tm++) {
+                    if (tMrks[tm].getAttribute('mid') === mid) {
+                      tText = serializeNodeWithTags(tMrks[tm]).text;
+                      break;
+                    }
+                  }
+                }
+                if (tText.trim()) status = 'draft';
+
+                extracted.push({
+                  id: mid,
+                  sourceText: sInfo.text,
+                  targetText: tText,
+                  tags: sInfo.tags,
+                  status: status,
+                  tuIndex: i
+                });
+              }
+            }
+          } else {
+            var sPlain = serializeNodeWithTags(segSource);
+            var tPlain = targetNode ? serializeNodeWithTags(targetNode).text : '';
+            if (sPlain.text.trim()) {
+              extracted.push({
+                id: String(extracted.length + 1),
+                sourceText: sPlain.text,
+                targetText: tPlain,
+                tags: sPlain.tags,
+                status: tPlain.trim() ? 'draft' : 'untranslated',
+                tuIndex: i
+              });
+            }
+          }
+        }
+
+        if (extracted.length === 0) {
+          showError('未能从该文件中提取到可编辑的句段。');
+          return;
+        }
+
+        state.segments = extracted;
+        state.activeIndex = 0;
+        document.getElementById('errorBanner').style.display = 'none';
+        renderEditor(displayTitle);
+      } catch (e) {
+        showError('解析句段出错：' + e.message);
+      }
+    }
+
+    function serializeNodeWithTags(node) {
+      var text = '';
+      var tags = [];
+      for (var i = 0; i < node.childNodes.length; i++) {
+        var child = node.childNodes[i];
+        if (child.nodeType === 3) {
+          text += child.nodeValue;
+        } else if (child.nodeType === 1) {
+          var tagName = child.localName || child.nodeName;
+          var idAttr = child.getAttribute('id') || (tags.length + 1);
+          if (child.childNodes.length > 0 && tagName === 'g') {
+            var openTag = '<g id="' + idAttr + '">';
+            var closeTag = '</g>';
+            tags.push(openTag, closeTag);
+            var inner = serializeNodeWithTags(child);
+            text += openTag + inner.text + closeTag;
+            tags = tags.concat(inner.tags);
+          } else {
+            var selfTag = '<' + tagName + ' id="' + idAttr + '"/>';
+            tags.push(selfTag);
+            text += selfTag;
+          }
+        }
+      }
+      return { text: text, tags: tags };
+    }
+
+    function escapeHTML(str) {
+      return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    }
+
+    function formatSourceHTML(rawText) {
+      var escaped = escapeHTML(rawText);
+      return escaped.replace(/(&lt;\/?[a-zA-Z0-9_-]+(?:\s+id=&quot;[^&]+&quot;|\s+id="[^"]+")?\s*\/?&gt;)/g, function(match) {
+        var cleanTag = match.replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"');
+        return '<span class="tag-pill" data-tag="' + escapeHTML(cleanTag) + '">' + match + '</span>';
+      });
+    }
+
+    // 6. 渲染编辑器界面
+    function renderEditor(customTitle) {
+      document.getElementById('emptyState').style.display = 'none';
+      if (customTitle) {
+        document.getElementById('fileNameLabel').textContent = '当前文件：' + customTitle;
+      } else {
+        document.getElementById('fileNameLabel').textContent = '当前文件：' + state.fileName;
+      }
+
+      var listEl = document.getElementById('segmentList');
+      listEl.innerHTML = '';
+
+      var confirmedCount = 0;
+      state.segments.forEach(function(seg, idx) {
+        if (seg.status === 'confirmed') confirmedCount++;
+
+        var card = document.createElement('div');
+        card.className = 'seg-card' + (idx === state.activeIndex ? ' active' : '') + (seg.status === 'confirmed' ? ' confirmed' : '');
+        card.id = 'seg-card-' + idx;
+
+        var statusLabel = seg.status === 'confirmed' ? '已确认' : (seg.status === 'draft' ? '草稿' : '未翻译');
+        var statusClass = seg.status === 'confirmed' ? 'st-confirmed' : (seg.status === 'draft' ? 'st-draft' : 'st-untranslated');
+
+        card.innerHTML =
+          '<div class="seg-meta">' +
+            '<span>句段 #' + seg.id + '</span>' +
+            '<span class="seg-status ' + statusClass + '">' + statusLabel + '</span>' +
+          '</div>' +
+          '<div class="seg-grid">' +
+            '<div class="source-box">' + formatSourceHTML(seg.sourceText) + '</div>' +
+            '<textarea class="target-box" data-idx="' + idx + '" placeholder="在此输入译文...">' + escapeHTML(seg.targetText) + '</textarea>' +
+          '</div>' +
+          '<div class="card-quick-actions">' +
+            '<button type="button" class="btn-card-copy" data-idx="' + idx + '">复制原文</button>' +
+            '<button type="button" class="btn-success btn-card-confirm" data-idx="' + idx + '">✓ 确认此句</button>' +
+          '</div>';
+
+        card.addEventListener('click', function() {
+          setActiveSegment(idx, false);
+        });
+
+        listEl.appendChild(card);
+      });
+
+      document.getElementById('progressText').textContent = '进度：' + confirmedCount + ' / ' + state.segments.length;
+
+      // 绑定输入框与快捷按钮事件
+      document.querySelectorAll('.target-box').forEach(function(ta) {
+        ta.addEventListener('focus', function() {
+          var idx = parseInt(this.getAttribute('data-idx'), 10);
+          setActiveSegment(idx, false);
+        });
+        ta.addEventListener('input', function() {
+          var idx = parseInt(this.getAttribute('data-idx'), 10);
+          state.segments[idx].targetText = this.value;
+          if (state.segments[idx].status === 'untranslated' && this.value.trim()) {
+            state.segments[idx].status = 'draft';
+          }
+        });
+        ta.addEventListener('keydown', function(e) {
+          if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+            e.preventDefault();
+            var idx = parseInt(this.getAttribute('data-idx'), 10);
+            confirmSegment(idx);
+          }
+        });
+      });
+
+      document.querySelectorAll('.tag-pill').forEach(function(pill) {
+        pill.addEventListener('click', function(e) {
+          e.stopPropagation();
+          var tagStr = this.getAttribute('data-tag');
+          insertTagToActive(tagStr);
+        });
+      });
+
+      document.querySelectorAll('.btn-card-copy').forEach(function(btn) {
+        btn.addEventListener('click', function(e) {
+          e.stopPropagation();
+          var idx = parseInt(this.getAttribute('data-idx'), 10);
+          state.segments[idx].targetText = state.segments[idx].sourceText;
+          state.segments[idx].status = 'draft';
+          renderEditor();
+        });
+      });
+
+      document.querySelectorAll('.btn-card-confirm').forEach(function(btn) {
+        btn.addEventListener('click', function(e) {
+          e.stopPropagation();
+          var idx = parseInt(this.getAttribute('data-idx'), 10);
+          confirmSegment(idx);
+        });
+      });
+    }
+
+    function setActiveSegment(idx, shouldScroll) {
+      if (idx < 0 || idx >= state.segments.length) return;
+      state.activeIndex = idx;
+      document.querySelectorAll('.seg-card').forEach(function(el, i) {
+        if (i === idx) el.classList.add('active');
+        else el.classList.remove('active');
+      });
+      if (shouldScroll) {
+        var targetCard = document.getElementById('seg-card-' + idx);
+        if (targetCard) {
+          targetCard.scrollIntoView({ behavior: 'smooth', block: 'center' });
+          var ta = targetCard.querySelector('textarea');
+          if (ta) ta.focus();
+        }
+      }
+    }
+
+    function insertTagToActive(tagStr) {
+      var seg = state.segments[state.activeIndex];
+      if (!seg) return;
+      seg.targetText = (seg.targetText || '') + tagStr;
+      seg.status = 'draft';
+      renderEditor();
+      setActiveSegment(state.activeIndex, false);
+    }
+
+    function confirmSegment(idx) {
+      var seg = state.segments[idx];
+      if (!seg) return;
+      seg.status = 'confirmed';
+      if (seg.targetText.trim()) {
+        state.tmMemory.unshift({ source: seg.sourceText, target: seg.targetText, score: 100 });
+      }
+      // 自动跳到下一条未确认句段
+      var nextIdx = idx + 1;
+      for (var i = idx + 1; i < state.segments.length; i++) {
+        if (state.segments[i].status !== 'confirmed') {
+          nextIdx = i;
+          break;
+        }
+      }
+      if (nextIdx >= state.segments.length) nextIdx = state.segments.length - 1;
+      state.activeIndex = nextIdx;
+      renderEditor();
+      setActiveSegment(nextIdx, true);
+    }
+
+    // 7. 工具栏与底部工作栏按钮绑定
+    document.getElementById('fileInput').addEventListener('change', function(e) {
+      if (e.target.files && e.target.files[0]) {
+        handleFileUpload(e.target.files[0]);
+      }
+    });
+
+    document.getElementById('btnLoadSample').addEventListener('click', loadSampleProject);
+    document.getElementById('btnLoadSampleHero').addEventListener('click', loadSampleProject);
+
+    document.getElementById('btnConfirmDock').addEventListener('click', function() {
+      confirmSegment(state.activeIndex);
+    });
+
+    document.getElementById('btnCopySource').addEventListener('click', function() {
+      var seg = state.segments[state.activeIndex];
+      if (!seg) return;
+      seg.targetText = seg.sourceText;
+      seg.status = 'draft';
+      renderEditor();
+      setActiveSegment(state.activeIndex, false);
+    });
+
+    document.getElementById('btnPrev').addEventListener('click', function() {
+      setActiveSegment(Math.max(0, state.activeIndex - 1), true);
+    });
+
+    document.getElementById('btnNext').addEventListener('click', function() {
+      setActiveSegment(Math.min(state.segments.length - 1, state.activeIndex + 1), true);
+    });
+
+    document.getElementById('btnPretranslate').addEventListener('click', function() {
+      if (state.segments.length === 0) return;
+      var count = 0;
+      state.segments.forEach(function(seg) {
+        if (!seg.targetText.trim()) {
+          var match = state.tmMemory.find(function(m) {
+            return m.source.toLowerCase().trim() === seg.sourceText.toLowerCase().trim();
+          });
+          if (match) {
+            seg.targetText = match.target;
+            seg.status = 'draft';
+            count++;
+          }
+        }
+      });
+      renderEditor();
+      alert('TM 预翻译完成，共自动填充 ' + count + ' 个句段。');
+    });
+
+    document.getElementById('btnTagQA').addEventListener('click', function() {
+      if (state.segments.length === 0) return;
+      for (var i = 0; i < state.segments.length; i++) {
+        var seg = state.segments[i];
+        if (!seg.targetText.trim()) continue;
+        for (var t = 0; t < seg.tags.length; t++) {
+          if (seg.targetText.indexOf(seg.tags[t]) === -1) {
+            setActiveSegment(i, true);
+            alert('标签 QA 警告：句段 #' + seg.id + ' 缺少内联标签 ' + seg.tags[t]);
+            return;
+          }
+        }
+      }
+      alert('标签检查通过！所有已译句段内联标签完整。');
+    });
+
+    document.getElementById('btnOpenTM').addEventListener('click', function() {
+      var seg = state.segments[state.activeIndex];
+      var tagsArea = document.getElementById('drawerTagsArea');
+      var tmArea = document.getElementById('drawerTMArea');
+
+      if (seg && seg.tags.length > 0) {
+        tagsArea.innerHTML = '<div style="font-size:12px;color:#94a3b8;margin-bottom:6px;">点击插入当前句段内联标签：</div>' +
+          seg.tags.map(function(t) {
+            return '<button type="button" class="drawer-tag-btn" data-tag="' + escapeHTML(t) + '" style="margin-right:6px;">' + escapeHTML(t) + '</button>';
+          }).join('');
+      } else {
+        tagsArea.innerHTML = '<div style="font-size:12px;color:#94a3b8;">当前句段无内联格式标签</div>';
+      }
+
+      tmArea.innerHTML = state.tmMemory.slice(0, 4).map(function(m, idx) {
+        return '<div class="tm-item">' +
+          '<div style="font-size:11px;color:#34d399;margin-bottom:4px;">匹配度 ' + m.score + '%</div>' +
+          '<div style="font-size:12px;color:#94a3b8;margin-bottom:4px;">' + escapeHTML(m.source) + '</div>' +
+          '<div style="font-size:13px;margin-bottom:8px;">' + escapeHTML(m.target) + '</div>' +
+          '<button type="button" class="btn-primary btn-apply-tm" data-tmidx="' + idx + '" style="padding:5px 10px;font-size:12px;">应用此译文</button>' +
+        '</div>';
+      }).join('');
+
+      document.querySelectorAll('.drawer-tag-btn').forEach(function(b) {
+        b.addEventListener('click', function() {
+          insertTagToActive(this.getAttribute('data-tag'));
+          document.getElementById('tmDrawerBackdrop').style.display = 'none';
+        });
+      });
+
+      document.querySelectorAll('.btn-apply-tm').forEach(function(b) {
+        b.addEventListener('click', function() {
+          var m = state.tmMemory[parseInt(this.getAttribute('data-tmidx'), 10)];
+          if (m && state.segments[state.activeIndex]) {
+            state.segments[state.activeIndex].targetText = m.target;
+            state.segments[state.activeIndex].status = 'draft';
+            renderEditor();
+          }
+          document.getElementById('tmDrawerBackdrop').style.display = 'none';
+        });
+      });
+
+      document.getElementById('tmDrawerBackdrop').style.display = 'block';
+    });
+
+    document.getElementById('btnCloseDrawer').addEventListener('click', function() {
+      document.getElementById('tmDrawerBackdrop').style.display = 'none';
+    });
+    document.getElementById('tmDrawerBackdrop').addEventListener('click', function() {
+      this.style.display = 'none';
+    });
+
+    // 8. 导出返回包 (.sdlrpx / .sdlxliff)
+    document.getElementById('btnExport').addEventListener('click', function() {
+      if (state.segments.length === 0) {
+        alert('请先打开项目包或加载示例后再导出。');
+        return;
+      }
+
+      // 将译文写回 XML DOM
+      if (state.xmlDoc) {
+        var transUnits = state.xmlDoc.getElementsByTagName('trans-unit');
+        state.segments.forEach(function(seg) {
+          var tu = transUnits[seg.tuIndex];
+          if (!tu) return;
+          var targetNode = tu.getElementsByTagName('target')[0];
+          if (!targetNode) {
+            targetNode = state.xmlDoc.createElement('target');
+            tu.appendChild(targetNode);
+          }
+          var tMrks = targetNode.getElementsByTagName('mrk');
+          var updated = false;
+          for (var i = 0; i < tMrks.length; i++) {
+            if (tMrks[i].getAttribute('mid') === seg.id) {
+              tMrks[i].textContent = seg.targetText;
+              updated = true;
+              break;
+            }
+          }
+          if (!updated && tMrks.length === 0) {
+            targetNode.textContent = seg.targetText;
+          }
+        });
+
+        var serializer = new XMLSerializer();
+        var updatedXml = serializer.serializeToString(state.xmlDoc);
+
+        if (state.zipInstance && state.xliffPath) {
+          state.zipInstance.file(state.xliffPath, updatedXml);
+          var outName = state.fileName.replace(/\.sdlppx$/i, '') + '_return.sdlrpx';
+          state.zipInstance.generateAsync({ type: 'blob' }).then(function(blob) {
+            triggerDownload(blob, outName);
+          });
+          return;
+        } else {
+          var xliffBlob = new Blob([updatedXml], { type: 'application/xml;charset=utf-8' });
+          triggerDownload(xliffBlob, state.fileName || 'translated.sdlxliff');
+          return;
+        }
+      }
+
+      // 示例项目导出 JSON/文本备份
+      var sampleOut = state.segments.map(function(s) {
+        return '[' + s.id + '] ' + s.sourceText + '\n -> ' + s.targetText;
+      }).join('\n\n');
+      triggerDownload(new Blob([sampleOut], { type: 'text/plain;charset=utf-8' }), 'Sample_Translated.txt');
+    });
+
+    function triggerDownload(blob, filename) {
+      var url = URL.createObjectURL(blob);
+      var a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    }
+  </script>
+</body>
+</html>
