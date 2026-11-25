@@ -1,0 +1,355 @@
+﻿```html
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>WebCAT Studio — SDLPPX / SDLXLIFF 双语编辑器</title>
+  <!-- Tailwind CSS CDN -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- JSZip CDN 用于解析和重新打包 .sdlppx / .sdlrpx -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+  <!-- Inter 字体 -->
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <style>
+    body {
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      /* 适配移动端安全区域与动态视口 */
+      height: 100dvh;
+    }
+    .font-mono-code {
+      font-family: 'JetBrains Mono', monospace;
+    }
+    /* 编辑器内联标签胶囊样式 */
+    .cat-tag-pill {
+      display: inline-flex;
+      align-items: center;
+      user-select: none;
+      vertical-align: baseline;
+      padding: 0 6px;
+      margin: 0 2px;
+      border-radius: 5px;
+      font-size: 11px;
+      font-weight: 600;
+      line-height: 1.45;
+      font-family: 'JetBrains Mono', monospace;
+      background-color: #ede9fe;
+      color: #6d28d9;
+      border: 1px solid #c4b5fd;
+      cursor: pointer;
+      transition: all 0.15s ease;
+    }
+    .cat-tag-pill:hover {
+      background-color: #ddd6fe;
+      border-color: #8b5cf6;
+      transform: translateY(-0.5px);
+    }
+    .cat-tag-pill[data-tag-type="close"] {
+      background-color: #fae8ff;
+      color: #a21caf;
+      border-color: #f0abfc;
+    }
+    .cat-tag-pill[data-tag-type="empty"] {
+      background-color: #e0f2fe;
+      color: #0369a1;
+      border-color: #7dd3fc;
+    }
+    /* 可编辑区域轮廓和空状态提示 */
+    .target-editor:focus {
+      outline: none;
+    }
+    .target-editor:empty:before {
+      content: attr(data-placeholder);
+      color: #94a3b8;
+      pointer-events: none;
+    }
+    /* 自定义滚动条 */
+    ::-webkit-scrollbar {
+      width: 7px;
+      height: 7px;
+    }
+    ::-webkit-scrollbar-track {
+      background: #f1f5f9;
+    }
+    ::-webkit-scrollbar-thumb {
+      background: #cbd5e1;
+      border-radius: 9999px;
+    }
+    ::-webkit-scrollbar-thumb:hover {
+      background: #94a3b8;
+    }
+    /* 隐藏移动端横向工具栏滚动条 */
+    .no-scrollbar::-webkit-scrollbar {
+      display: none;
+    }
+    .no-scrollbar {
+      -ms-overflow-style: none;
+      scrollbar-width: none;
+    }
+  </style>
+</head>
+<body class="bg-slate-100 text-slate-800 flex flex-col overflow-hidden select-none">
+
+  <!-- 顶部应用栏 & 工具栏 -->
+  <header class="bg-white border-b border-slate-200 shadow-xs z-20 shrink-0">
+    <!-- 第一行：品牌与文件包操作 -->
+    <div class="px-3 sm:px-4 py-2 flex items-center justify-between gap-2 border-b border-slate-100">
+      <div class="flex items-center gap-2.5 min-w-0">
+        <div class="w-8 h-8 rounded-lg bg-gradient-to-br from-blue-600 to-indigo-700 flex items-center justify-center text-white font-bold shadow-xs shrink-0">
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M3 5h12M9 3v2m1.048 9.5A18.022 18.022 0 016.412 9m6.088 9h7M11 21l5-10 5 10M12.751 5C11.783 10.77 8.07 15.61 3 18.129" />
+          </svg>
+        </div>
+        <div class="min-w-0">
+          <div class="flex items-center gap-1.5">
+            <h1 class="font-bold text-slate-900 text-sm sm:text-base tracking-tight truncate">WebCAT Studio</h1>
+            <span class="hidden sm:inline-block text-[11px] font-medium px-2 py-0.5 rounded-full bg-blue-50 text-blue-700 border border-blue-200 shrink-0">SDLPPX / SDLXLIFF</span>
+          </div>
+          <p id="projectMetaLabel" class="text-[11px] sm:text-xs text-slate-500 truncate">未加载项目包 — 请上传或加载示例</p>
+        </div>
+      </div>
+
+      <!-- 操作按钮组（移动端紧凑触控布局） -->
+      <div class="flex items-center gap-1.5 sm:gap-2 shrink-0">
+        <input type="file" id="fileInput" accept=".sdlppx,.sdlxliff,.xliff,.zip" class="hidden" />
+        <button id="btnUpload" class="inline-flex items-center gap-1 px-2.5 sm:px-3 py-2 sm:py-1.5 rounded-lg text-xs font-medium bg-slate-900 hover:bg-slate-800 active:scale-95 text-white transition cursor-pointer shadow-xs">
+          <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" />
+          </svg>
+          <span>打开</span>
+          <span class="hidden md:inline">.sdlppx / .sdlxliff</span>
+        </button>
+
+        <button id="btnLoadSample" class="inline-flex items-center gap-1 px-2.5 sm:px-3 py-2 sm:py-1.5 rounded-lg text-xs font-medium bg-blue-50 hover:bg-blue-100 active:scale-95 text-blue-700 border border-blue-200 transition cursor-pointer">
+          <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4" />
+          </svg>
+          <span>示例</span>
+          <span class="hidden md:inline">.sdlppx 项目包</span>
+        </button>
+
+        <div class="h-4 w-px bg-slate-200 mx-0.5 hidden sm:block"></div>
+
+        <button id="btnExportRpx" disabled class="inline-flex items-center gap-1 px-2.5 sm:px-3 py-2 sm:py-1.5 rounded-lg text-xs font-medium bg-emerald-600 hover:bg-emerald-700 active:scale-95 disabled:bg-slate-200 disabled:text-slate-400 text-white transition cursor-pointer disabled:cursor-not-allowed shadow-xs">
+          <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+          </svg>
+          <span class="hidden sm:inline">导出返回包 (.sdlrpx)</span>
+          <span class="sm:hidden">导出</span>
+        </button>
+
+        <button id="btnExportPpx" disabled class="hidden md:inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium bg-white hover:bg-slate-50 disabled:bg-slate-100 disabled:text-slate-400 text-slate-700 border border-slate-300 transition cursor-pointer disabled:cursor-not-allowed">
+          导出 .sdlppx
+        </button>
+      </div>
+    </div>
+
+    <!-- 第二行：编辑工具条（移动端支持横向平滑滚动） -->
+    <div class="px-3 sm:px-4 py-1.5 bg-slate-50/80 flex items-center justify-between gap-2 text-xs overflow-x-auto no-scrollbar">
+      <div class="flex items-center gap-2 shrink-0">
+        <!-- 文件选择器 -->
+        <div class="flex items-center gap-1">
+          <span class="text-slate-500 font-medium hidden sm:inline">文件:</span>
+          <select id="fileSelector" disabled class="bg-white border border-slate-300 rounded-lg px-2 py-1.5 sm:py-1 text-xs font-medium text-slate-700 focus:outline-none focus:border-blue-500 disabled:opacity-50 max-w-[140px] sm:max-w-[210px]">
+            <option value="">无可用文件</option>
+          </select>
+        </div>
+
+        <!-- 状态过滤 -->
+        <select id="statusFilter" class="bg-white border border-slate-300 rounded-lg px-2 py-1.5 sm:py-1 text-xs text-slate-700 focus:outline-none focus:border-blue-500">
+          <option value="all">全部 (All)</option>
+          <option value="unconfirmed">未确认</option>
+          <option value="Draft">草稿</option>
+          <option value="Translated">已确认</option>
+          <option value="Unspecified">未翻译</option>
+        </select>
+
+        <!-- 文本搜索 -->
+        <div class="relative">
+          <input id="searchInput" type="text" placeholder="搜索..." class="bg-white border border-slate-300 rounded-lg pl-7 pr-2 py-1.5 sm:py-1 text-xs text-slate-700 w-28 sm:w-44 focus:outline-none focus:border-blue-500" />
+          <svg class="w-3.5 h-3.5 text-slate-400 absolute left-2 top-2 sm:top-1.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+          </svg>
+        </div>
+
+        <div class="h-4 w-px bg-slate-200 mx-0.5 hidden lg:block"></div>
+
+        <!-- 桌面端快捷编辑动作（移动端由底部悬浮快捷栏接管，避免重复占用顶部空间） -->
+        <button id="btnCopySource" disabled title="快捷键: Alt+Insert 或 Ctrl+Insert" class="hidden lg:inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-white hover:bg-slate-100 disabled:opacity-40 text-slate-700 border border-slate-300 font-medium transition cursor-pointer">
+          <svg class="w-3.5 h-3.5 text-slate-500" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
+          </svg>
+          复制原文
+        </button>
+
+        <button id="btnConfirmSeg" disabled title="快捷键: Ctrl+Enter" class="hidden lg:inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-blue-600 hover:bg-blue-700 disabled:opacity-40 text-white font-medium transition cursor-pointer shadow-2xs">
+          <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7" />
+          </svg>
+          确认句段 (Ctrl+Enter)
+        </button>
+
+        <button id="btnPreTranslate" disabled title="使用当前记忆库自动填充未翻译句段" class="inline-flex items-center gap-1 px-2.5 py-1.5 sm:py-1 rounded-lg bg-white hover:bg-slate-100 active:scale-95 disabled:opacity-40 text-slate-700 border border-slate-300 font-medium transition cursor-pointer">
+          <svg class="w-3.5 h-3.5 text-indigo-600" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M13 10V3L4 14h7v7l9-11h-7z" />
+          </svg>
+          <span>TM 预翻译</span>
+        </button>
+
+        <button id="btnVerifyTags" disabled title="检查所有已译句段的内联标签是否与原文一致" class="inline-flex items-center gap-1 px-2.5 py-1.5 sm:py-1 rounded-lg bg-white hover:bg-slate-100 active:scale-95 disabled:opacity-40 text-slate-700 border border-slate-300 font-medium transition cursor-pointer">
+          <svg class="w-3.5 h-3.5 text-amber-600" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+          </svg>
+          <span>标签 QA</span>
+        </button>
+      </div>
+
+      <!-- 进度统计 -->
+      <div class="flex items-center gap-2 shrink-0 pl-2">
+        <div class="w-16 sm:w-32 h-2 bg-slate-200 rounded-full overflow-hidden">
+          <div id="progressBar" class="h-full bg-emerald-500 transition-all duration-300" style="width: 0%"></div>
+        </div>
+        <span id="progressPercent" class="font-semibold text-slate-700">0%</span>
+        <span id="statsText" class="text-slate-500 hidden md:inline">0 / 0 句段 · 0 词</span>
+      </div>
+    </div>
+  </header>
+
+  <!-- 主工作区：左侧双语编辑器网格 + 右侧检查器（移动端支持抽屉式展开/收起） -->
+  <main class="flex-1 flex flex-col lg:flex-row overflow-hidden relative">
+    
+    <!-- 左侧：双语对照编辑器主网格 -->
+    <section class="flex-1 flex flex-col bg-white lg:border-r border-slate-200 overflow-hidden">
+      <!-- 表头（桌面端双栏表头 / 移动端语言对指示条） -->
+      <div class="hidden md:grid grid-cols-12 bg-slate-100 border-b border-slate-200 text-[11px] font-semibold uppercase tracking-wider text-slate-500 py-2 px-3 shrink-0">
+        <div class="col-span-1 text-center">#</div>
+        <div class="col-span-5 px-2 flex items-center justify-between">
+          <span>原文 (Source)</span>
+          <span id="srcLangBadge" class="text-[10px] font-mono-code bg-slate-200/80 text-slate-600 px-1.5 py-0.2 rounded">en-US</span>
+        </div>
+        <div class="col-span-1 text-center">状态</div>
+        <div class="col-span-5 px-2 flex items-center justify-between">
+          <span>译文 (Target)</span>
+          <span id="tgtLangBadge" class="text-[10px] font-mono-code bg-blue-100 text-blue-700 px-1.5 py-0.2 rounded">zh-CN</span>
+        </div>
+      </div>
+
+      <!-- 移动端语言对与交互提示栏 -->
+      <div class="flex md:hidden items-center justify-between bg-slate-100 border-b border-slate-200 px-3 py-1.5 text-[11px] font-medium text-slate-600 shrink-0">
+        <div class="flex items-center gap-1.5">
+          <span id="mobileSrcLangBadge" class="font-mono-code bg-slate-200/90 text-slate-700 px-1.5 py-0.5 rounded text-[10px]">en-US</span>
+          <span class="text-slate-400">→</span>
+          <span id="mobileTgtLangBadge" class="font-mono-code bg-blue-100 text-blue-700 px-1.5 py-0.5 rounded text-[10px]">zh-CN</span>
+        </div>
+        <span class="text-[10px] text-slate-400">点击原文标签可插入译文</span>
+      </div>
+
+      <!-- 句段列表容器 -->
+      <div id="segmentListContainer" class="flex-1 overflow-y-auto divide-y divide-slate-200 select-text pb-20 lg:pb-0">
+        <!-- 空状态欢迎引导 -->
+        <div id="emptyState" class="h-full flex flex-col items-center justify-center p-6 sm:p-8 text-center">
+          <div class="flex flex-wrap items-center justify-center gap-3">
+            <button onclick="document.getElementById('btnLoadSample').click()" class="px-4 py-2.5 rounded-xl text-xs font-semibold bg-blue-600 hover:bg-blue-700 active:scale-95 text-white shadow-xs transition cursor-pointer">
+              立即加载示例 .sdlppx 测试
+            </button>
+            <button onclick="document.getElementById('fileInput').click()" class="px-4 py-2.5 rounded-xl text-xs font-semibold bg-white hover:bg-slate-50 active:scale-95 text-slate-700 border border-slate-300 transition cursor-pointer">
+              选择本地 .sdlppx 文件
+            </button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 移动端专用：底部悬浮触控快捷栏（解决手机端无 Ctrl+Enter / Alt+Insert / Ctrl+1 的痛点） -->
+    <div id="mobileActionBar" class="lg:hidden bg-white/95 backdrop-blur-md border-t border-slate-200 px-2.5 py-2 flex items-center justify-between gap-1.5 z-30 shrink-0 shadow-[0_-4px_12px_rgba(0,0,0,0.06)]">
+      <!-- 上一句 / 下一句 导航 -->
+      <div class="flex items-center gap-1 shrink-0">
+        <button id="btnMobilePrev" disabled title="上一句段" class="p-2.5 rounded-xl bg-slate-100 hover:bg-slate-200 active:scale-95 disabled:opacity-40 text-slate-700 transition cursor-pointer">
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2.2" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M5 15l7-7 7 7" />
+          </svg>
+        </button>
+        <button id="btnMobileNext" disabled title="下一句段" class="p-2.5 rounded-xl bg-slate-100 hover:bg-slate-200 active:scale-95 disabled:opacity-40 text-slate-700 transition cursor-pointer">
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2.2" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M19 9l-7 7-7-7" />
+          </svg>
+        </button>
+      </div>
+
+      <!-- 中部辅助按钮：复制原文 + TM 面板切换 -->
+      <div class="flex items-center gap-1.5 flex-1 justify-center">
+        <button id="btnMobileCopySource" disabled class="flex-1 max-w-[100px] inline-flex items-center justify-center gap-1 py-2.5 px-2 rounded-xl bg-slate-100 hover:bg-slate-200 active:scale-95 disabled:opacity-40 text-slate-700 text-xs font-medium transition cursor-pointer">
+          <svg class="w-3.5 h-3.5 text-slate-500 shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
+          </svg>
+          <span class="truncate">复制原文</span>
+        </button>
+
+        <button id="btnToggleDrawer" class="flex-1 max-w-[105px] inline-flex items-center justify-center gap-1 py-2.5 px-2 rounded-xl bg-indigo-50 hover:bg-indigo-100 active:scale-95 text-indigo-700 border border-indigo-200 text-xs font-semibold transition cursor-pointer">
+          <span>TM / 标签</span>
+          <span id="mobileTmBadge" class="px-1.5 py-0.2 text-[10px] rounded-full bg-indigo-600 text-white font-mono-code">0</span>
+        </button>
+      </div>
+
+      <!-- 主触控确认按钮：替代电脑端 Ctrl + Enter -->
+      <button id="btnMobileConfirm" disabled class="inline-flex items-center justify-center gap-1.5 px-3.5 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-700 active:scale-95 disabled:bg-slate-200 disabled:text-slate-400 text-white text-xs font-bold shadow-sm transition cursor-pointer shrink-0">
+        <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7" />
+        </svg>
+        <span>确认句段</span>
+      </button>
+    </div>
+
+    <!-- 移动端抽屉遮罩层 -->
+    <div id="drawerBackdrop" class="fixed inset-0 bg-slate-900/40 backdrop-blur-[1px] z-30 hidden lg:hidden transition-opacity"></div>
+
+    <!-- 右侧：辅助检查器面板 (桌面端常驻侧栏 / 移动端底部滑出抽屉) -->
+    <aside id="inspectorDrawer" class="fixed inset-x-0 bottom-0 h-[68dvh] rounded-t-2xl shadow-2xl z-40 transform translate-y-full transition-transform duration-300 ease-out lg:static lg:translate-y-0 lg:rounded-none lg:shadow-none lg:w-[390px] xl:w-[430px] lg:h-full bg-slate-50 flex flex-col shrink-0 border-t lg:border-t-0 border-slate-200">
+      <!-- 移动端抽屉顶部拖拽指示条与关闭按钮 -->
+      <div class="flex lg:hidden items-center justify-between px-4 pt-2.5 pb-1 bg-white rounded-t-2xl">
+        <div class="w-10 h-1 rounded-full bg-slate-300 mx-auto"></div>
+        <button id="btnCloseDrawer" class="text-xs font-medium text-slate-500 hover:text-slate-800 px-2 py-1 rounded-lg bg-slate-100">
+          收起面板
+        </button>
+      </div>
+
+      <!-- 选项卡导航 -->
+      <div class="flex border-b border-slate-200 bg-white px-2 pt-1 gap-1 shrink-0">
+        <button data-tab="tm" class="inspector-tab active px-3 py-2 text-xs font-semibold border-b-2 border-blue-600 text-blue-600 rounded-t-lg transition cursor-pointer">
+          翻译记忆 (TM)
+        </button>
+        <button data-tab="tags" class="inspector-tab px-3 py-2 text-xs font-medium border-b-2 border-transparent text-slate-500 hover:text-slate-800 rounded-t-lg transition cursor-pointer">
+          标签与 XML
+        </button>
+        <button data-tab="package" class="inspector-tab px-3 py-2 text-xs font-medium border-b-2 border-transparent text-slate-500 hover:text-slate-800 rounded-t-lg transition cursor-pointer">
+          项目包结构
+        </button>
+      </div>
+
+      <!-- 选项卡内容区 -->
+      <div class="flex-1 overflow-y-auto p-3.5 select-text">
+        
+        <!-- 1. 翻译记忆 (TM) 面板 -->
+        <div id="tab-tm" class="inspector-pane space-y-3">
+          <div class="flex items-center justify-between">
+            <span class="text-[11px] font-semibold uppercase tracking-wider text-slate-500">记忆库匹配结果</span>
+            <span id="tmCountBadge" class="text-[11px] text-slate-500 bg-slate-200/70 px-2 py-0.5 rounded-full">0 条记忆</span>
+          </div>
+          <div id="tmResultsList" class="space-y-2.5">
+            <div class="p-4 rounded-xl bg-white border border-slate-200 text-xs text-slate-400 text-center">
+              请选择一个句段以检索翻译记忆库匹配...
+            </div>
+          </div>
+        </div>
+
+        <!-- 2. 标签映射与底层 XML 面板 -->
+        <div id="tab-tags" class="inspector-pane hidden space-y-3">
+          <div class="bg-white rounded-xl border border-slate-200 p-3 space-y-2">
+            <h3 class="text-xs font-semibold text-slate-800 flex items-center justify-between">
+              <span>当前句段内联标签 (Inline Tags)</span>
+              <span class="text-[11px] font-normal text-slate-400">点击原文标签可插入译文</span>
+            </h3>
+            <div id="tagMappingList" class="text-xs text-slate-500 space-y-1.5">
+       
